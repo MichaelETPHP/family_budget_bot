@@ -11,6 +11,10 @@ CURRENCY = os.getenv("CURRENCY", "ብር")
 TZ = ZoneInfo(os.getenv("TIMEZONE", "Africa/Addis_Ababa"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").rstrip("/")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
+API_KEY = os.getenv("API_KEY", "")  # empty = /api/* disabled
+
+if WEBHOOK_URL and len(WEBHOOK_SECRET) < 24:
+    raise RuntimeError("Webhook mode needs WEBHOOK_SECRET (at least 24 random characters).")
 
 # Everything the bot stores lives in DATA_DIR (a Docker volume in production).
 DATA_DIR = os.getenv("DATA_DIR", ".")
