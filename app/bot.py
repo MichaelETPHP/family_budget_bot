@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from telegram import (
+    WebAppInfo,
     BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -29,7 +30,7 @@ from telegram.ext import (
 )
 from telegram.warnings import PTBUserWarning
 
-from . import db
+from . import db, webapp
 from . import ethiopian as et
 from .config import (ALLOWED_PHONES, BOT_TOKEN, PEOPLE_NAMES, STATE_PATH, TZ, VOICE_DIR as _VOICE_DIR,
                      normalize_phone)
@@ -490,7 +491,32 @@ def pick_default_account(tx: dict, user_id: int) -> int | None:
 
 def amount_prompt(lang: str, head: str, body: str, error: bool = False) -> str:
     warn = f"\n\n{t(lang, 'bad_amount')}" if error else ""
-    return f"{head}\n\n{body}\n\n{t(lang, 'enter_amount')}{warn}"
+    ask = t(lang, "enter_amount_app") if webapp.enabled() else t(lang, "enter_amount")
+    return f"{head}\n\n{body}\n\n{ask}{warn}"
+
+
+def amount_kb(lang: str, title: str, max_amount: float | None = None,
+              allow_zero: bool = False) -> InlineKeyboardMarkup:
+    """🔢 opens the Mini App, where the phone shows its NUMBER keyboard. Typing in the chat still works."""
+    rows = []
+    if webapp.enabled():
+        url = webapp.amount_url(lang, title, t(lang, "cur"), max_amount, allow_zero)
+        rows.append([InlineKeyboardButton(t(lang, "btn_open_pad"), web_app=WebAppInfo(url=url), style=BLUE)])
+    rows.append([cancel_button(lang)])
+    return InlineKeyboardMarkup(rows)
+
+
+def tx_amount_kb(lang: str, tx: dict) -> InlineKeyboardMarkup:
+    return amount_kb(lang, f"{t(lang, 'kn_' + tx['kind'])} · {cat_label(lang, tx['kind'], tx['category'])}")
+
+
+def tr_amount_kb(lang: str, tr: dict) -> InlineKeyboardMarkup:
+    src, dst = db.get_account(tr["from"]), db.get_account(tr["to"])
+    return amount_kb(lang, f"{src['name']} ➜ {dst['name']}", max_amount=max(src["balance"], 0))
+
+
+def sb_amount_kb(lang: str, acc) -> InlineKeyboardMarkup:
+    return amount_kb(lang, f"{t(lang, 'kn_setbal')} · {acc['name']}", allow_zero=True)
 
 
 def tx_confirm_view(lang: str, tx: dict) -> tuple[str, InlineKeyboardMarkup]:
@@ -565,7 +591,7 @@ async def got_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await edit_flow(context, update.effective_chat.id,
                     amount_prompt(lang, step_header(lang, tx["kind"], 2, "s_amount", 3),
                                   f"📂 {cat_label(lang, tx['kind'], tx['category'])}"),
-                    InlineKeyboardMarkup([[cancel_button(lang)]]))
+                    tx_amount_kb(lang, tx))
     return AMOUNT
 
 
@@ -578,7 +604,7 @@ async def got_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await edit_flow(context, update.effective_chat.id,
                         amount_prompt(lang, step_header(lang, tx["kind"], 2, "s_amount", 3),
                                       f"📂 {cat_label(lang, tx['kind'], tx['category'])}", error=True),
-                        InlineKeyboardMarkup([[cancel_button(lang)]]))
+                        tx_amount_kb(lang, tx))
         return AMOUNT
     tx["amount"] = amount
     tx["account_id"] = pick_default_account(tx, update.effective_user.id)
@@ -767,7 +793,7 @@ async def transfer_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(targets) == 1:  # only one possible destination: skip the question
         tr["to"] = targets[0]["id"]
         await edit_flow(context, update.effective_chat.id, transfer_amount_view(lang, tr, viewer),
-                        InlineKeyboardMarkup([[cancel_button(lang)]]))
+                        tr_amount_kb(lang, tr))
         return TR_AMOUNT
     await edit_flow(context, update.effective_chat.id,
                     f"{step_header(lang, 'transfer', tr_step(tr, 2), 's_to', tr_steps(tr))}\n\n"
@@ -794,7 +820,7 @@ async def transfer_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tr = context.user_data["tr"]
     tr["to"] = int(q.data.split(":")[1])
     await edit_flow(context, update.effective_chat.id, transfer_amount_view(lang, tr, me(context)),
-                    InlineKeyboardMarkup([[cancel_button(lang)]]))
+                    tr_amount_kb(lang, tr))
     return TR_AMOUNT
 
 
@@ -830,7 +856,7 @@ async def transfer_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await delete_quietly(update.message)
     tr = context.user_data["tr"]
     amount = parse_amount(update.message.text)
-    cancel_kb = InlineKeyboardMarkup([[cancel_button(lang)]])
+    cancel_kb = tr_amount_kb(lang, tr)
     if amount is None:
         await edit_flow(context, update.effective_chat.id, transfer_amount_view(lang, tr, viewer, error=True), cancel_kb)
         return TR_AMOUNT
@@ -877,7 +903,7 @@ async def transfer_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if db.get_account(tr["from"])["balance"] < tr["amount"]:  # balance changed meanwhile
         await q.answer(t(lang, "not_enough"), show_alert=True)
         await edit_flow(context, update.effective_chat.id, transfer_amount_view(lang, tr, me(context), too_much=True),
-                        InlineKeyboardMarkup([[cancel_button(lang)]]))
+                        tr_amount_kb(lang, tr))
         return TR_AMOUNT
     await q.answer(t(lang, "toast_saved"))
     context.user_data.pop("tr")
@@ -979,8 +1005,7 @@ async def setbal_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return SB_ACCOUNT
     await q.answer()
     context.user_data["sb"] = acc["id"]
-    await edit_flow(context, update.effective_chat.id, setbal_view(lang, acc),
-                    InlineKeyboardMarkup([[cancel_button(lang)]]))
+    await edit_flow(context, update.effective_chat.id, setbal_view(lang, acc), sb_amount_kb(lang, acc))
     return SB_AMOUNT
 
 
@@ -991,7 +1016,7 @@ async def setbal_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     amount = parse_amount(update.message.text, allow_zero=True)
     if amount is None:
         await edit_flow(context, update.effective_chat.id, setbal_view(lang, db.get_account(acc_id), error=True),
-                        InlineKeyboardMarkup([[cancel_button(lang)]]))
+                        sb_amount_kb(lang, db.get_account(acc_id)))
         return SB_AMOUNT
     before = db.get_account(acc_id)["balance"]
     db.set_balance(acc_id, amount)

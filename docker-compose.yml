@@ -22,6 +22,7 @@ services:
       WEBHOOK_URL: ${WEBHOOK_URL:-}
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
       API_KEY: ${API_KEY:-}                # empty = /api/* disabled
+      PUBLIC_URL: ${PUBLIC_URL:-}          # https address for the Mini App (defaults to WEBHOOK_URL)
       DATA_DIR: /app/data
       DB_PATH: /app/data/expenses.db
     volumes:
