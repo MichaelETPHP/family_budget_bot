@@ -58,6 +58,7 @@ def build_snapshot() -> dict:
                        "from": f"{f['name']} ({f['owner_name']})" if f else None,
                        "to": f"{to['name']} ({to['owner_name']})" if to else None,
                        "family_transfer": bool(f and to and f["owner"] != to["owner"]),
+                       "note": r.get("note"), "voice_file_id": r.get("voice_file_id"),
                        "user_id": r["user_id"], "by": name_by_uid.get(r["user_id"]),
                        "created_at": r["created_at"], "ethiopian_date": _eth(r["created_at"])})
 
@@ -137,9 +138,10 @@ def import_snapshot(data: dict) -> dict:
                           (t["id"], t["user_id"], t["type"], t["amount"], t["category"], t.get("note"),
                            t.get("voice_file_id"), t.get("account_id"), t["created_at"]))
             for r in data.get("transfers", []):
-                c.execute("INSERT INTO transfers (id, user_id, from_id, to_id, amount, created_at) VALUES (?,?,?,?,?,?)",
+                c.execute("""INSERT INTO transfers (id, user_id, from_id, to_id, amount, note, voice_file_id, created_at)
+                             VALUES (?,?,?,?,?,?,?,?)""",
                           (r["id"], r["user_id"], r["from_account_id"], r["to_account_id"], r["amount"],
-                           r["created_at"]))
+                           r.get("note"), r.get("voice_file_id"), r["created_at"]))
             for m in data.get("voice_memos", []):
                 c.execute("INSERT INTO memos (id, user_id, file_id, duration, created_at) VALUES (?,?,?,?,?)",
                           (m["id"], m["user_id"], m["file_id"], m.get("duration_sec", 0), m["created_at"]))

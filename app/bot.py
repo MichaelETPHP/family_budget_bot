@@ -43,7 +43,7 @@ VOICE_DIR = Path(_VOICE_DIR)
 ICON = {"expense": "💸", "income": "💰", "transfer": "🔄", "setbal": "✏️"}
 
 (PHONE, NAME, CATEGORY, AMOUNT, CONFIRM, NOTE,
- TR_FROM, TR_TO, TR_AMOUNT, TR_CONFIRM, SB_ACCOUNT, SB_AMOUNT) = range(12)
+ TR_FROM, TR_TO, TR_AMOUNT, TR_CONFIRM, SB_ACCOUNT, SB_AMOUNT, TR_WHO, TR_NOTE) = range(14)
 
 
 # ═════════════════════════ small helpers ═════════════════════════
@@ -689,22 +689,66 @@ async def note_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ═════════════════════════ transfers ═════════════════════════
-
-@registered_only
-async def transfer_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lang = L(context)
-    viewer = me(context)
-    await open_flow(update, context,
-                    f"{step_header(lang, 'transfer', 1, 's_from', 4)}\n\n{t(lang, 'tr_from_q')}\n"
-                    f"<i>{t(lang, 'red_empty')}</i>",
-                    accounts_keyboard(lang, "tr_from", db.accounts(viewer), viewer, need_money=True))
-    context.user_data["tr"] = {}
-    return TR_FROM
-
+# Flow: who → from → to → amount → confirm (optional 📝 reason, text or 🎙️ voice) → save
+#   who  = "mine" (between my own accounts) or a family member's owner key (send to them)
 
 def tr_label(a, viewer: str) -> str:
     """Your own account: '🏦 CBE'. Someone else's: '🏦 CBE (Partner)'."""
     return acc_full(a) if a["owner"] and a["owner"] != viewer else acc_label(a)
+
+
+def family_members(viewer: str) -> list[tuple[str, str]]:
+    """[(owner_key, name)] of the other people who have accounts."""
+    seen: dict[str, str] = {}
+    for a in db.accounts():
+        if a["owner"] and a["owner"] != viewer:
+            seen.setdefault(a["owner"], a["owner_name"])
+    return list(seen.items())
+
+
+def tr_steps(tr: dict) -> int:
+    return 5 if tr.get("has_who") else 4
+
+
+def tr_step(tr: dict, base: int) -> int:
+    """Step numbers shift by one when the 'who' step is shown."""
+    return base + (1 if tr.get("has_who") else 0)
+
+
+def from_view(lang: str, viewer: str, tr: dict):
+    return (f"{step_header(lang, 'transfer', tr_step(tr, 1), 's_from', tr_steps(tr))}\n\n"
+            f"{t(lang, 'tr_from_q')}\n<i>{t(lang, 'red_empty')}</i>",
+            accounts_keyboard(lang, "tr_from", db.accounts(viewer), viewer, need_money=True))
+
+
+@registered_only
+async def transfer_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang, viewer = L(context), me(context)
+    people = family_members(viewer)
+    if people:
+        tr = {"has_who": True}
+        rows = [[InlineKeyboardButton(t(lang, "btn_between_mine"), callback_data="tr_who:mine")]]
+        rows += [[InlineKeyboardButton(t(lang, "btn_to_person", name=name), callback_data=f"tr_who:{owner}",
+                                       style=BLUE)] for owner, name in people]
+        rows.append([cancel_button(lang)])
+        await open_flow(update, context,
+                        f"{step_header(lang, 'transfer', 1, 's_who', 5)}\n\n{t(lang, 'tr_who_q')}",
+                        InlineKeyboardMarkup(rows))
+        context.user_data["tr"] = tr
+        return TR_WHO
+    tr = {"who": "mine"}
+    await open_flow(update, context, *from_view(lang, viewer, tr))
+    context.user_data["tr"] = tr
+    return TR_FROM
+
+
+async def transfer_who(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q, lang, viewer = update.callback_query, L(context), me(context)
+    await q.answer()
+    tr = context.user_data["tr"]
+    tr["who"] = q.data.split(":", 1)[1]
+    await edit_flow(context, update.effective_chat.id, *from_view(lang, viewer, tr))
+    return TR_FROM
 
 
 async def transfer_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -713,10 +757,20 @@ async def transfer_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if src["balance"] <= 0 or (viewer and src["owner"] not in (viewer, "")):
         return await account_empty(update, context)
     await q.answer()
-    context.user_data["tr"] = {"from": src["id"]}
-    targets = [a for a in db.accounts() if a["id"] != src["id"]]  # yours + family members'
+    tr = context.user_data["tr"]
+    tr["from"] = src["id"]
+    who = tr.get("who", "mine")
+    if who == "mine":
+        targets = [a for a in db.accounts(viewer) if a["id"] != src["id"]]
+    else:
+        targets = [a for a in db.accounts() if a["owner"] == who]
+    if len(targets) == 1:  # only one possible destination: skip the question
+        tr["to"] = targets[0]["id"]
+        await edit_flow(context, update.effective_chat.id, transfer_amount_view(lang, tr, viewer),
+                        InlineKeyboardMarkup([[cancel_button(lang)]]))
+        return TR_AMOUNT
     await edit_flow(context, update.effective_chat.id,
-                    f"{step_header(lang, 'transfer', 2, 's_to', 4)}\n\n"
+                    f"{step_header(lang, 'transfer', tr_step(tr, 2), 's_to', tr_steps(tr))}\n\n"
                     f"📤 {balance_line(lang, src)}\n\n{t(lang, 'tr_to_q')}",
                     accounts_keyboard(lang, "tr_to", targets, viewer))
     return TR_TO
@@ -725,7 +779,7 @@ async def transfer_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def transfer_amount_view(lang: str, tr: dict, viewer: str, error: bool = False, too_much: bool = False) -> str:
     src, dst = db.get_account(tr["from"]), db.get_account(tr["to"])
     family_note = f"\n{t(lang, 'tr_family')}" if src["owner"] != dst["owner"] else ""
-    text = amount_prompt(lang, step_header(lang, "transfer", 3, "s_amount", 4),
+    text = amount_prompt(lang, step_header(lang, "transfer", tr_step(tr, 3), "s_amount", tr_steps(tr)),
                          f"{acc_label(src)}  ➜  {tr_label(dst, viewer)}{family_note}\n"
                          f"<i>{t(lang, 'available', name=esc(src['name']), amt=money(src['balance'], lang))}</i>",
                          error)
@@ -744,6 +798,33 @@ async def transfer_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return TR_AMOUNT
 
 
+def note_lines(lang: str, note: str | None, voice: str | None) -> str:
+    out = ""
+    if note:
+        out += f"\n📝 <i>{esc(note)}</i>"
+    if voice:
+        out += f"\n{t(lang, 'voice_label')}"
+    return out
+
+
+def tr_confirm_view(lang: str, tr: dict, viewer: str):
+    src, dst = db.get_account(tr["from"]), db.get_account(tr["to"])
+    amount = tr["amount"]
+    family = src["owner"] != dst["owner"]
+    text = (f"{step_header(lang, 'transfer', tr_step(tr, 4), 's_confirm', tr_steps(tr))}\n\n"
+            f"{acc_label(src)}  ➜  {tr_label(dst, viewer)}" + (f"\n{t(lang, 'tr_family')}" if family else "") + "\n"
+            f"💵 <b>{money(amount, lang)}</b>{note_lines(lang, tr.get('note'), tr.get('voice'))}\n"
+            f"├ <i>{acc_label(src)}: {money(src['balance'], lang)} ➜ {money(src['balance'] - amount, lang)}</i>\n"
+            f"└ <i>{tr_label(dst, viewer)}: {money(dst['balance'], lang)} ➜ {money(dst['balance'] + amount, lang)}</i>")
+    has_note = tr.get("note") or tr.get("voice")
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(t(lang, "btn_save"), callback_data="tr_save", style=GREEN)],
+        [InlineKeyboardButton(t(lang, "btn_change_note" if has_note else "btn_tr_note"), callback_data="tr_note")],
+        [cancel_button(lang)],
+    ])
+    return text, kb
+
+
 async def transfer_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang, viewer = L(context), me(context)
     await delete_quietly(update.message)
@@ -753,21 +834,40 @@ async def transfer_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if amount is None:
         await edit_flow(context, update.effective_chat.id, transfer_amount_view(lang, tr, viewer, error=True), cancel_kb)
         return TR_AMOUNT
-    src, dst = db.get_account(tr["from"]), db.get_account(tr["to"])
-    if amount > src["balance"]:
+    if amount > db.get_account(tr["from"])["balance"]:
         await edit_flow(context, update.effective_chat.id, transfer_amount_view(lang, tr, viewer, too_much=True),
                         cancel_kb)
         return TR_AMOUNT
     tr["amount"] = amount
-    family_note = f"\n{t(lang, 'tr_family')}" if src["owner"] != dst["owner"] else ""
-    await edit_flow(context, update.effective_chat.id,
-                    f"{step_header(lang, 'transfer', 4, 's_confirm', 4)}\n\n"
-                    f"{acc_label(src)}  ➜  {tr_label(dst, viewer)}{family_note}\n"
-                    f"💵 <b>{money(amount, lang)}</b>\n"
-                    f"├ <i>{acc_label(src)}: {money(src['balance'], lang)} ➜ {money(src['balance'] - amount, lang)}</i>\n"
-                    f"└ <i>{tr_label(dst, viewer)}: {money(dst['balance'], lang)} ➜ {money(dst['balance'] + amount, lang)}</i>",
-                    InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "btn_save"), callback_data="tr_save", style=GREEN)],
-                                          [cancel_button(lang)]]))
+    await edit_flow(context, update.effective_chat.id, *tr_confirm_view(lang, tr, viewer))
+    return TR_CONFIRM
+
+
+async def transfer_note_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q, lang = update.callback_query, L(context)
+    await q.answer()
+    text, _ = tr_confirm_view(lang, context.user_data["tr"], me(context))
+    await edit_flow(context, update.effective_chat.id, f"{text}\n\n{t(lang, 'tr_note_prompt')}",
+                    InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "btn_back"), callback_data="tr_back")]]))
+    return TR_NOTE
+
+
+async def transfer_note_got(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang, msg = L(context), update.message
+    tr = context.user_data["tr"]
+    if msg.voice:
+        tr["voice"], tr["note"] = msg.voice.file_id, None
+    else:
+        tr["note"], tr["voice"] = msg.text.strip()[:150], None
+    await delete_quietly(msg)
+    await edit_flow(context, update.effective_chat.id, *tr_confirm_view(lang, tr, me(context)))
+    return TR_CONFIRM
+
+
+async def transfer_note_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    await edit_flow(context, update.effective_chat.id, *tr_confirm_view(L(context), context.user_data["tr"], me(context)))
     return TR_CONFIRM
 
 
@@ -783,7 +883,10 @@ async def transfer_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("tr")
     context.user_data.pop("flow_msg", None)
     user, viewer = db.get_user(update.effective_user.id), me(context)
-    tr_id = db.add_transfer(user["telegram_id"], tr["from"], tr["to"], tr["amount"])
+    note, voice = tr.get("note"), tr.get("voice")
+    tr_id = db.add_transfer(user["telegram_id"], tr["from"], tr["to"], tr["amount"], note, voice)
+    if voice:
+        await save_voice_copy(context.bot, voice, f"tr_{user['telegram_id']}")
     stamp = db.get_transfer(tr_id)["created_at"]
     src, dst = db.get_account(tr["from"]), db.get_account(tr["to"])
     bal = lambda a: db.balance_as_of(a["id"], stamp, tr_id=tr_id)  # noqa: E731
@@ -791,7 +894,8 @@ async def transfer_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(
         f"{t(lang, 'tr_saved')}\n{DIVIDER}\n"
         f"🔄 <b>{money(tr['amount'], lang)}</b>\n"
-        f"{acc_label(src)}  ➜  {tr_label(dst, viewer)}" + (f"\n{t(lang, 'tr_family')}" if family else "") + "\n"
+        f"{acc_label(src)}  ➜  {tr_label(dst, viewer)}" + (f"\n{t(lang, 'tr_family')}" if family else "")
+        + note_lines(lang, note, voice) + "\n"
         f"🕒 {when(lang, stamp)}\n{DIVIDER}\n"
         f"📤 {t(lang, 'balance_after', acc=acc_label(src), amt=money(bal(src), lang))}"
         + ("" if family else f"\n📥 {t(lang, 'balance_after', acc=acc_label(dst), amt=money(bal(dst), lang))}"),
@@ -800,15 +904,16 @@ async def transfer_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await refresh_views(context)
 
     def personal(u) -> str | None:
-        """The person who received the money gets a 'sent you' message."""
+        """The person who received the money gets a 'sent you' message, with the reason."""
         if family and normalize_phone(u["phone"]) == dst["owner"]:
-            return t(u["lang"], "notify_sent_you", name=esc(user["name"]), amt=money(tr["amount"], u["lang"]),
-                     acc=acc_label(dst), bal=money(bal(dst), u["lang"]))
+            return (t(u["lang"], "notify_sent_you", name=esc(user["name"]), amt=money(tr["amount"], u["lang"]),
+                      acc=acc_label(dst), bal=money(bal(dst), u["lang"])) + note_lines(u["lang"], note, voice))
         return None
 
     sent = await notify_others(context, user["telegram_id"], lambda lg: (
         f"{t(lg, 'notify_transfer', name=esc(user['name']))}\n"
-        f"🔄 <b>{money(tr['amount'], lg)}</b>  ·  {acc_full(src)} ➜ {acc_full(dst)}"), build_for=personal)
+        f"🔄 <b>{money(tr['amount'], lg)}</b>  ·  {acc_full(src)} ➜ {acc_full(dst)}" + note_lines(lg, note, voice)),
+        voice_id=voice, build_for=personal)
     track(context, f"tr:{tr_id}", [(update.effective_chat.id, q.message.message_id), *sent])
     return ConversationHandler.END
 
@@ -1015,8 +1120,11 @@ def render_history(lang: str):
             out.append(f"\n<b>— {day_label(lang, current_day)} —</b>")
         if typ == "tr":
             icon = "🤝" if r["from_owner"] != r["to_owner"] else "🔄"
+            why = f" · <i>{esc(r['note'])}</i>" if r["note"] else " · 🎙️" if r["voice_file_id"] else ""
             out.append(f"{icon} <b>{money(r['amount'], lang)}</b> · {transfer_route(r)}\n"
-                       f"└ <i>{esc(r['name'])} · {ts:%H:%M}</i>")
+                       f"└ <i>{esc(r['name'])} · {ts:%H:%M}</i>{why}")
+            if r["voice_file_id"]:
+                play.append(InlineKeyboardButton(f"▶️ {icon} {money(r['amount'], lang)}", callback_data=f"play:tr:{r['id']}"))
             continue
         note = f" · <i>{esc(r['note'])}</i>" if r["note"] else " · 🎙️" if r["voice_file_id"] else ""
         acc = f" · {r['account_icon']} {esc(r['account_name'])}" if r["account_name"] else ""
@@ -1142,6 +1250,10 @@ async def play_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         row = db.get_memo(int(ident))
         file_id = row["file_id"] if row else None
         caption = f"🎙️ <i>{when(lang, row['created_at'])}</i>" if row else ""
+    elif what == "tr":
+        row = db.get_transfer(int(ident))
+        file_id = row["voice_file_id"] if row else None
+        caption = f"🔄 <b>{money(row['amount'], lang)}</b>\n🕒 <i>{when(lang, row['created_at'])}</i>" if row else ""
     else:
         row = db.get_tx(int(ident))
         file_id = row["voice_file_id"] if row else None
@@ -1249,10 +1361,14 @@ def build_application() -> Application:
                       CallbackQueryHandler(save_tx, pattern="^save$")],
             NOTE: [MessageHandler(text_input | filters.VOICE, note_save),
                    CallbackQueryHandler(note_back, pattern=r"^note_back:\d+$")],
+            TR_WHO: [CallbackQueryHandler(transfer_who, pattern=r"^tr_who:\w+$")],
             TR_FROM: [CallbackQueryHandler(transfer_from, pattern=r"^tr_from:\d+$")],
             TR_TO: [CallbackQueryHandler(transfer_to, pattern=r"^tr_to:\d+$")],
             TR_AMOUNT: [MessageHandler(text_input, transfer_amount)],
-            TR_CONFIRM: [CallbackQueryHandler(transfer_save, pattern="^tr_save$")],
+            TR_CONFIRM: [CallbackQueryHandler(transfer_save, pattern="^tr_save$"),
+                         CallbackQueryHandler(transfer_note_ask, pattern="^tr_note$")],
+            TR_NOTE: [MessageHandler(text_input | filters.VOICE, transfer_note_got),
+                      CallbackQueryHandler(transfer_note_back, pattern="^tr_back$")],
             SB_ACCOUNT: [CallbackQueryHandler(setbal_account, pattern=r"^sb_acc:\d+$")],
             SB_AMOUNT: [MessageHandler(text_input, setbal_amount)],
         },
@@ -1269,7 +1385,7 @@ def build_application() -> Application:
         app.add_handler(MessageHandler(labels(action), fn))
 
     app.add_handler(MessageHandler(filters.VOICE, voice_memo))
-    app.add_handler(CallbackQueryHandler(play_voice, pattern=r"^play:(memo|tx):\d+$"))
+    app.add_handler(CallbackQueryHandler(play_voice, pattern=r"^play:(memo|tx|tr):\d+$"))
     app.add_handler(CallbackQueryHandler(undo_confirm, pattern=r"^undo:(no|tx:\d+|tr:\d+)$"))
     app.add_handler(CallbackQueryHandler(lang_pick, pattern=r"^lang:(en|am)$"))
     app.add_handler(CallbackQueryHandler(cancel, pattern="^cancel$"))  # stale cancel buttons

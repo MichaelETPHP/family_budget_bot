@@ -88,6 +88,11 @@ def init_db() -> None:
             c.execute("ALTER TABLE transactions ADD COLUMN voice_file_id TEXT")
         if "account_id" not in cols:
             c.execute("ALTER TABLE transactions ADD COLUMN account_id INTEGER REFERENCES accounts(id)")
+        tcols = {r["name"] for r in c.execute("PRAGMA table_info(transfers)")}
+        if "note" not in tcols:
+            c.execute("ALTER TABLE transfers ADD COLUMN note TEXT")
+        if "voice_file_id" not in tcols:
+            c.execute("ALTER TABLE transfers ADD COLUMN voice_file_id TEXT")
 
         acols = {r["name"] for r in c.execute("PRAGMA table_info(accounts)")}
         if "owner" not in acols:
@@ -280,11 +285,13 @@ def set_balance(account_id: int, target: float) -> None:
         c.execute("UPDATE accounts SET initial = ? WHERE id = ?", (target - movements, account_id))
 
 
-def add_transfer(user_id: int, from_id: int, to_id: int, amount: float) -> int:
+def add_transfer(user_id: int, from_id: int, to_id: int, amount: float,
+                 note: str | None = None, voice_file_id: str | None = None) -> int:
     with conn() as c:
         cur = c.execute(
-            "INSERT INTO transfers (user_id, from_id, to_id, amount, created_at) VALUES (?, ?, ?, ?, ?)",
-            (user_id, from_id, to_id, amount, _stamp()),
+            """INSERT INTO transfers (user_id, from_id, to_id, amount, note, voice_file_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, from_id, to_id, amount, note, voice_file_id, _stamp()),
         )
         return cur.lastrowid
 
