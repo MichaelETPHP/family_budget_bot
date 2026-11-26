@@ -488,114 +488,9 @@ def pick_default_account(tx: dict, user_id: int) -> int | None:
     return max(ok, key=lambda a: a["balance"])["id"] if ok else None
 
 
-# ═════════════════════════ number pad ═════════════════════════
-# Bots can't open the phone's numeric keyboard, so amounts are entered on a keypad
-# inside the form message. Every tap edits that one message: nothing is sent to the chat.
-# Typing the number still works too.
-
-PAD_MAX_DIGITS = 9
-
-
-def pad_display(buf: str) -> str:
-    """'1250.5' -> '1,250.5' (what you typed, with thousands separators)."""
-    if not buf:
-        return "0"
-    whole, dot, frac = buf.partition(".")
-    return f"{int(whole or 0):,}" + (dot + frac)
-
-
-def amount_prompt(lang: str, head: str, body: str, error: bool = False, buf: str = "") -> str:
+def amount_prompt(lang: str, head: str, body: str, error: bool = False) -> str:
     warn = f"\n\n{t(lang, 'bad_amount')}" if error else ""
-    return (f"{head}\n\n{body}\n\n{t(lang, 'amount_label')}\n"
-            f"<code> {pad_display(buf)} </code> {t(lang, 'cur')}\n"
-            f"<i>{t(lang, 'pad_hint')}</i>{warn}")
-
-
-def numpad_kb(lang: str) -> InlineKeyboardMarkup:
-    key = lambda label, k: InlineKeyboardButton(label, callback_data=f"np:{k}")  # noqa: E731
-    return InlineKeyboardMarkup([
-        [key("1", "1"), key("2", "2"), key("3", "3")],
-        [key("4", "4"), key("5", "5"), key("6", "6")],
-        [key("7", "7"), key("8", "8"), key("9", "9")],
-        [key("·", "dot"), key("0", "0"), key("⌫", "del")],
-        [cancel_button(lang), InlineKeyboardButton(t(lang, "btn_ok"), callback_data="np:ok", style=GREEN)],
-    ])
-
-
-def pad_press(buf: str, key: str) -> str:
-    """Apply one key to the buffer, with sane limits (one dot, 2 decimals, no leading zeros)."""
-    if key == "del":
-        return buf[:-1]
-    if key == "dot":
-        return buf if "." in buf else (buf or "0") + "."
-    if not key.isdigit():
-        return buf
-    if "." in buf:
-        return buf if len(buf.split(".")[1]) >= 2 else buf + key
-    if len(buf) >= PAD_MAX_DIGITS:
-        return buf
-    return key if buf in ("", "0") else buf + key
-
-
-def amount_screen(context: ContextTypes.DEFAULT_TYPE, error: bool = False, too_much: bool = False):
-    """The amount step for whichever form is open (expense/income, transfer, balance fix)."""
-    lang, ud = L(context), context.user_data
-    buf, ctx = ud.get("pad", ""), ud.get("pad_ctx")
-    if ctx == "tr":
-        text = transfer_amount_view(lang, ud["tr"], me(context), error=error, too_much=too_much, buf=buf)
-    elif ctx == "sb":
-        text = setbal_view(lang, db.get_account(ud["sb"]), error=error, buf=buf)
-    else:
-        tx = ud["tx"]
-        text = amount_prompt(lang, step_header(lang, tx["kind"], 2, "s_amount", 3),
-                             f"📂 {cat_label(lang, tx['kind'], tx['category'])}", error=error, buf=buf)
-    return text, numpad_kb(lang)
-
-
-async def show_amount_step(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ctx: str) -> None:
-    context.user_data["pad"], context.user_data["pad_ctx"] = "", ctx
-    await edit_flow(context, chat_id, *amount_screen(context))
-
-
-async def numpad_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q, ud = update.callback_query, context.user_data
-    key = q.data.split(":", 1)[1]
-    buf = ud.get("pad", "")
-    if key != "ok":
-        new = pad_press(buf, key)
-        await q.answer()
-        if new != buf:  # unchanged (e.g. a 3rd decimal): no edit, no flicker
-            ud["pad"] = new
-            await edit_flow(context, update.effective_chat.id, *amount_screen(context))
-        return None  # stay on the amount step
-
-    ctx = ud.get("pad_ctx")
-    amount = parse_amount(buf, allow_zero=(ctx == "sb")) if buf else None
-    if amount is None:
-        await q.answer(t(L(context), "pad_empty"), show_alert=False)
-        return None
-    await q.answer()
-    return await amount_entered(update, context, amount)
-
-
-async def typed_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Typing still works: same rules as the keypad."""
-    await delete_quietly(update.message)
-    ctx = context.user_data.get("pad_ctx")
-    amount = parse_amount(update.message.text, allow_zero=(ctx == "sb"))
-    if amount is None:
-        await edit_flow(context, update.effective_chat.id, *amount_screen(context, error=True))
-        return None
-    return await amount_entered(update, context, amount)
-
-
-async def amount_entered(update: Update, context: ContextTypes.DEFAULT_TYPE, amount: float):
-    ctx = context.user_data.get("pad_ctx")
-    if ctx == "tr":
-        return await tr_amount_entered(update, context, amount)
-    if ctx == "sb":
-        return await sb_amount_entered(update, context, amount)
-    return await tx_amount_entered(update, context, amount)
+    return f"{head}\n\n{body}\n\n{t(lang, 'enter_amount')}{warn}"
 
 
 def tx_confirm_view(lang: str, tx: dict) -> tuple[str, InlineKeyboardMarkup]:
@@ -663,17 +558,28 @@ async def add_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def got_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
+    q, lang = update.callback_query, L(context)
     await q.answer()
     tx = context.user_data["tx"]
     tx["category"] = q.data.split(":", 1)[1]
-    await show_amount_step(context, update.effective_chat.id, "tx")
+    await edit_flow(context, update.effective_chat.id,
+                    amount_prompt(lang, step_header(lang, tx["kind"], 2, "s_amount", 3),
+                                  f"📂 {cat_label(lang, tx['kind'], tx['category'])}"),
+                    InlineKeyboardMarkup([[cancel_button(lang)]]))
     return AMOUNT
 
 
-async def tx_amount_entered(update: Update, context: ContextTypes.DEFAULT_TYPE, amount: float):
+async def got_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = L(context)
+    await delete_quietly(update.message)
     tx = context.user_data["tx"]
+    amount = parse_amount(update.message.text)
+    if amount is None:
+        await edit_flow(context, update.effective_chat.id,
+                        amount_prompt(lang, step_header(lang, tx["kind"], 2, "s_amount", 3),
+                                      f"📂 {cat_label(lang, tx['kind'], tx['category'])}", error=True),
+                        InlineKeyboardMarkup([[cancel_button(lang)]]))
+        return AMOUNT
     tx["amount"] = amount
     tx["account_id"] = pick_default_account(tx, update.effective_user.id)
     await edit_flow(context, update.effective_chat.id, *tx_confirm_view(lang, tx))
@@ -860,7 +766,8 @@ async def transfer_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
         targets = [a for a in db.accounts() if a["owner"] == who]
     if len(targets) == 1:  # only one possible destination: skip the question
         tr["to"] = targets[0]["id"]
-        await show_amount_step(context, update.effective_chat.id, "tr")
+        await edit_flow(context, update.effective_chat.id, transfer_amount_view(lang, tr, viewer),
+                        InlineKeyboardMarkup([[cancel_button(lang)]]))
         return TR_AMOUNT
     await edit_flow(context, update.effective_chat.id,
                     f"{step_header(lang, 'transfer', tr_step(tr, 2), 's_to', tr_steps(tr))}\n\n"
@@ -869,25 +776,25 @@ async def transfer_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return TR_TO
 
 
-def transfer_amount_view(lang: str, tr: dict, viewer: str, error: bool = False, too_much: bool = False,
-                         buf: str = "") -> str:
+def transfer_amount_view(lang: str, tr: dict, viewer: str, error: bool = False, too_much: bool = False) -> str:
     src, dst = db.get_account(tr["from"]), db.get_account(tr["to"])
     family_note = f"\n{t(lang, 'tr_family')}" if src["owner"] != dst["owner"] else ""
     text = amount_prompt(lang, step_header(lang, "transfer", tr_step(tr, 3), "s_amount", tr_steps(tr)),
                          f"{acc_label(src)}  ➜  {tr_label(dst, viewer)}{family_note}\n"
                          f"<i>{t(lang, 'available', name=esc(src['name']), amt=money(src['balance'], lang))}</i>",
-                         error, buf)
+                         error)
     if too_much:
         text += "\n\n" + t(lang, "tr_too_much", amt=money(src["balance"], lang), name=esc(src["name"]))
     return text
 
 
 async def transfer_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
+    q, lang = update.callback_query, L(context)
     await q.answer()
     tr = context.user_data["tr"]
     tr["to"] = int(q.data.split(":")[1])
-    await show_amount_step(context, update.effective_chat.id, "tr")
+    await edit_flow(context, update.effective_chat.id, transfer_amount_view(lang, tr, me(context)),
+                    InlineKeyboardMarkup([[cancel_button(lang)]]))
     return TR_AMOUNT
 
 
@@ -918,11 +825,18 @@ def tr_confirm_view(lang: str, tr: dict, viewer: str):
     return text, kb
 
 
-async def tr_amount_entered(update: Update, context: ContextTypes.DEFAULT_TYPE, amount: float):
+async def transfer_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang, viewer = L(context), me(context)
+    await delete_quietly(update.message)
     tr = context.user_data["tr"]
+    amount = parse_amount(update.message.text)
+    cancel_kb = InlineKeyboardMarkup([[cancel_button(lang)]])
+    if amount is None:
+        await edit_flow(context, update.effective_chat.id, transfer_amount_view(lang, tr, viewer, error=True), cancel_kb)
+        return TR_AMOUNT
     if amount > db.get_account(tr["from"])["balance"]:
-        await edit_flow(context, update.effective_chat.id, *amount_screen(context, too_much=True))
+        await edit_flow(context, update.effective_chat.id, transfer_amount_view(lang, tr, viewer, too_much=True),
+                        cancel_kb)
         return TR_AMOUNT
     tr["amount"] = amount
     await edit_flow(context, update.effective_chat.id, *tr_confirm_view(lang, tr, viewer))
@@ -962,8 +876,8 @@ async def transfer_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tr = context.user_data["tr"]
     if db.get_account(tr["from"])["balance"] < tr["amount"]:  # balance changed meanwhile
         await q.answer(t(lang, "not_enough"), show_alert=True)
-        context.user_data["pad"], context.user_data["pad_ctx"] = "", "tr"
-        await edit_flow(context, update.effective_chat.id, *amount_screen(context, too_much=True))
+        await edit_flow(context, update.effective_chat.id, transfer_amount_view(lang, tr, me(context), too_much=True),
+                        InlineKeyboardMarkup([[cancel_button(lang)]]))
         return TR_AMOUNT
     await q.answer(t(lang, "toast_saved"))
     context.user_data.pop("tr")
@@ -1050,27 +964,35 @@ async def setbal_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SB_ACCOUNT
 
 
-def setbal_view(lang: str, acc, error: bool = False, buf: str = "") -> str:
-    return amount_prompt(lang, step_header(lang, "setbal", 2, "s_amount", 2),
-                         f"{t(lang, 'sb_now', acc=acc_label(acc), amt=money(acc['balance'], lang))}\n"
-                         f"<i>{t(lang, 'sb_enter')}</i>", error, buf)
+def setbal_view(lang: str, acc, error: bool = False) -> str:
+    warn = f"\n\n{t(lang, 'bad_amount')}" if error else ""
+    return (f"{step_header(lang, 'setbal', 2, 's_amount', 2)}\n\n"
+            f"{t(lang, 'sb_now', acc=acc_label(acc), amt=money(acc['balance'], lang))}\n\n"
+            f"{t(lang, 'sb_enter')}{warn}")
 
 
 async def setbal_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
+    q, lang = update.callback_query, L(context)
     acc = db.get_account(int(q.data.split(":")[1]))
     if me(context) and acc["owner"] not in (me(context), ""):
         await q.answer("⛔")
         return SB_ACCOUNT
     await q.answer()
     context.user_data["sb"] = acc["id"]
-    await show_amount_step(context, update.effective_chat.id, "sb")
+    await edit_flow(context, update.effective_chat.id, setbal_view(lang, acc),
+                    InlineKeyboardMarkup([[cancel_button(lang)]]))
     return SB_AMOUNT
 
 
-async def sb_amount_entered(update: Update, context: ContextTypes.DEFAULT_TYPE, amount: float):
+async def setbal_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = L(context)
+    await delete_quietly(update.message)
     acc_id = context.user_data["sb"]
+    amount = parse_amount(update.message.text, allow_zero=True)
+    if amount is None:
+        await edit_flow(context, update.effective_chat.id, setbal_view(lang, db.get_account(acc_id), error=True),
+                        InlineKeyboardMarkup([[cancel_button(lang)]]))
+        return SB_AMOUNT
     before = db.get_account(acc_id)["balance"]
     db.set_balance(acc_id, amount)
     acc = db.get_account(acc_id)
@@ -1434,7 +1356,7 @@ def build_application() -> Application:
         ],
         states={
             CATEGORY: [CallbackQueryHandler(got_category, pattern=r"^cat:\w+$")],
-            AMOUNT: [CallbackQueryHandler(numpad_tap, pattern=r"^np:\w+$"), MessageHandler(text_input, typed_amount)],
+            AMOUNT: [MessageHandler(text_input, got_amount)],
             CONFIRM: [CallbackQueryHandler(pick_account, pattern=r"^acc:\d+$"),
                       CallbackQueryHandler(save_tx, pattern="^save$")],
             NOTE: [MessageHandler(text_input | filters.VOICE, note_save),
@@ -1442,13 +1364,13 @@ def build_application() -> Application:
             TR_WHO: [CallbackQueryHandler(transfer_who, pattern=r"^tr_who:\w+$")],
             TR_FROM: [CallbackQueryHandler(transfer_from, pattern=r"^tr_from:\d+$")],
             TR_TO: [CallbackQueryHandler(transfer_to, pattern=r"^tr_to:\d+$")],
-            TR_AMOUNT: [CallbackQueryHandler(numpad_tap, pattern=r"^np:\w+$"), MessageHandler(text_input, typed_amount)],
+            TR_AMOUNT: [MessageHandler(text_input, transfer_amount)],
             TR_CONFIRM: [CallbackQueryHandler(transfer_save, pattern="^tr_save$"),
                          CallbackQueryHandler(transfer_note_ask, pattern="^tr_note$")],
             TR_NOTE: [MessageHandler(text_input | filters.VOICE, transfer_note_got),
                       CallbackQueryHandler(transfer_note_back, pattern="^tr_back$")],
             SB_ACCOUNT: [CallbackQueryHandler(setbal_account, pattern=r"^sb_acc:\d+$")],
-            SB_AMOUNT: [CallbackQueryHandler(numpad_tap, pattern=r"^np:\w+$"), MessageHandler(text_input, typed_amount)],
+            SB_AMOUNT: [MessageHandler(text_input, setbal_amount)],
         },
         fallbacks=cancel_handlers,
         allow_reentry=True,
