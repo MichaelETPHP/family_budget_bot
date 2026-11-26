@@ -13,7 +13,26 @@ A family budget bot for Telegram, built with Python, FastAPI and python-telegram
 
 ---
 
-## 🚀 Deploy to a VPS (Docker)
+## ☁️ Deploy with Coolify (or Dokploy / Portainer)
+1. **Source:** this repository, branch `main`. **Build pack:** Docker Compose. **Compose file:** `/docker-compose.yml`.
+2. **Environment variables:** set `BOT_TOKEN`, `ALLOWED_PHONES`, `ACCOUNTS`, `NAMES` and `TIMEZONE` (see `.env.example`). Mark `BOT_TOKEN` as secret.
+3. **No domain or port is needed.** The bot polls Telegram, so leave the domain empty.
+4. **Stop every other copy of the bot first** (your PC, another server). Telegram allows only one per token.
+5. Deploy. Wait for the status to show healthy, and check that the logs say `🤖 Bot @… is running`.
+6. **Bring your data:** see "Move data into a hosted container" below.
+
+### Move data into a hosted container
+On the server (SSH), with `expenses.db` from `./deploy/backup.sh` uploaded to `/root/`:
+```bash
+C=$(docker ps --filter "label=com.docker.compose.service=bot" --format '{{.Names}}' | head -1)
+docker exec -i "$C" sh -c 'cat > /app/data/expenses.db.new' < /root/expenses.db
+docker exec "$C" sh -c 'mv /app/data/expenses.db.new /app/data/expenses.db && rm -f /app/data/bot_state.pickle'
+docker restart "$C"
+```
+
+## 🚀 Deploy to a VPS (plain Docker)
+On a plain VPS, add the local override to get the `127.0.0.1:8000` API port and the optional Caddy webhook:
+`docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build`
 
 Works on any Ubuntu or Debian VPS. 1 vCPU and 512 MB RAM is enough.
 
@@ -107,7 +126,7 @@ The default is **polling**. It needs no domain and no open ports, and is the rig
 If you have a domain and prefer webhooks:
 1. Point the domain's DNS **A record** at the VPS IP.
 2. In `.env`, set `DOMAIN=bot.example.com`, `WEBHOOK_URL=https://bot.example.com` and a long random `WEBHOOK_SECRET`.
-3. Open ports 80 and 443, then run `docker compose --profile webhook up -d --build`.
+3. Open ports 80 and 443, then run `docker compose -f docker-compose.yml -f docker-compose.local.yml --profile webhook up -d --build`.
 
 Caddy gets the HTTPS certificate automatically. Only `/webhook` is public, and the bot checks Telegram's secret token on every request.
 

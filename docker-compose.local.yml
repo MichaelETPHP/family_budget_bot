@@ -1,0 +1,28 @@
+# Optional extras for a plain VPS (NOT needed on Coolify):
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+# • publishes the API on 127.0.0.1:8000 (health check, /api/export)
+# • `--profile webhook` adds Caddy with automatic HTTPS for webhook mode
+services:
+  bot:
+    ports:
+      - "127.0.0.1:${HOST_PORT:-8000}:8000"
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["webhook"]
+    restart: unless-stopped
+    depends_on:
+      - bot
+    environment:
+      DOMAIN: ${DOMAIN:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
