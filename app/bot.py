@@ -262,11 +262,18 @@ async def delete_id(context: ContextTypes.DEFAULT_TYPE, chat_id: int, msg_id: in
             pass
 
 
+HOME_ANCHOR = "🏡"  # a lone emoji renders large: a quiet logo that holds the menu
+
+
 async def send_home(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str) -> None:
+    """Two messages:
+    • a tiny 🏡 anchor that carries the menu keyboard and is never deleted (deleting it would close the menu)
+    • the welcome text as a normal view, so the first tap on anything makes it disappear"""
     old = context.user_data.get("home_msg")
-    msg = await context.bot.send_message(chat_id, text, parse_mode=HTML, reply_markup=main_menu(L(context)))
-    context.user_data["home_msg"] = msg.message_id
+    anchor = await context.bot.send_message(chat_id, HOME_ANCHOR, reply_markup=main_menu(L(context)))
+    context.user_data["home_msg"] = anchor.message_id
     await delete_id(context, chat_id, old)
+    await show_view(context, chat_id, text)
 
 
 async def show_view(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str, kb=None,
