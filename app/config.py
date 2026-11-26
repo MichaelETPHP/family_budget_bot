@@ -12,8 +12,6 @@ TZ = ZoneInfo(os.getenv("TIMEZONE", "Africa/Addis_Ababa"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").rstrip("/")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
 API_KEY = os.getenv("API_KEY", "")  # empty = /api/* disabled
-# Public https address of this app (for the Mini App). Defaults to WEBHOOK_URL.
-PUBLIC_URL = (os.getenv("PUBLIC_URL", "") or WEBHOOK_URL).rstrip("/")
 
 if WEBHOOK_URL and len(WEBHOOK_SECRET) < 24:
     raise RuntimeError("Webhook mode needs WEBHOOK_SECRET (at least 24 random characters).")

@@ -4,12 +4,10 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
 from fastapi import FastAPI, Header, HTTPException, Request
-from pathlib import Path
-
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse
 from telegram import Update
 
-from . import db, jsonstore, webapp
+from . import db, jsonstore
 from .bot import build_application, setup_profile, today_local
 from .config import API_KEY, TZ, WEBHOOK_SECRET, WEBHOOK_URL
 
@@ -71,43 +69,6 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
     if WEBHOOK_SECRET and not secrets.compare_digest(x_telegram_bot_api_secret_token or "", WEBHOOK_SECRET):
         raise HTTPException(status_code=403)
     await tg_app.process_update(Update.de_json(await request.json(), tg_app.bot))
-    return {"ok": True}
-
-
-# ── Mini App: amount screen with the phone's number keyboard ──────────────────
-AMOUNT_PAGE = (Path(__file__).parent / "static" / "amount.html").read_text(encoding="utf-8")
-
-
-@app.get("/app/amount", response_class=HTMLResponse)
-async def amount_page():
-    return HTMLResponse(AMOUNT_PAGE, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
-
-
-@app.post("/app/amount")
-async def amount_submit(request: Request):
-    """The Mini App sends {init_data, amount}. After checking Telegram's signature, the amount
-    is handed to the bot exactly as if the user had typed it in the chat."""
-    try:
-        body = await request.json()
-        amount = float(body["amount"])
-    except (ValueError, KeyError, TypeError):
-        raise HTTPException(status_code=400)
-    user = webapp.verify_init_data(str(body.get("init_data", "")))
-    if not user or not db.get_user(int(user["id"])):
-        raise HTTPException(status_code=403)
-    if not (0 <= amount <= 1e10):
-        raise HTTPException(status_code=400)
-
-    uid = int(user["id"])
-    text = f"{amount:.2f}".rstrip("0").rstrip(".") or "0"
-    update = Update.de_json({
-        "update_id": 0,
-        "message": {"message_id": 0, "date": int(datetime.now().timestamp()),
-                    "chat": {"id": uid, "type": "private"},
-                    "from": {"id": uid, "is_bot": False, "first_name": user.get("first_name", "")},
-                    "text": text},
-    }, tg_app.bot)
-    await tg_app.process_update(update)
     return {"ok": True}
 
 
