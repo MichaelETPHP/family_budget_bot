@@ -1194,11 +1194,9 @@ async def setup_profile(app: Application) -> None:
     await app.bot.set_my_short_description("🏡 Family budget · 💸 expenses, 💰 income, 🏦 accounts")
     await app.bot.set_my_short_description("🏡 የቤተሰብ የገንዘብ መዝገብ · 💸 ወጪ እና 💰 ገቢ", language_code="am")
     await app.bot.set_my_description(
-        "🏡 Family Budget\n\n💸 Track expenses and 💰 income together\n🔄 Record transfers between accounts\n"
-        "🔔 Get notified when your family records something\n🌙 Daily summary every midnight\n\nPress «Start» 👇")
+        "🏡 Family Budget\n\n💸 Track expenses and 💰 income together\n\nPress «Start» 👇")
     await app.bot.set_my_description(
-        "🏡 የቤተሰብ የገንዘብ መዝገብ\n\n💸 ወጪ እና 💰 ገቢዎን በቀላሉ ይመዝግቡ\n🔄 በሂሳቦች መካከል ዝውውር ይመዝግቡ\n"
-        "🔔 የቤተሰብ አባል ሲመዘግብ ይነገርዎታል\n🌙 በየቀኑ እኩለ ሌሊት ማጠቃለያ\n\nለመጀመር «Start» ይጫኑ 👇",
+        "🏡 የቤተሰብ የገንዘብ መዝገብ\n\n💸 ወጪ እና 💰 ገቢዎን በቀላሉ ይመዝግቡ\n\nለመጀመር «Start» ይጫኑ 👇",
         language_code="am")
 
 
