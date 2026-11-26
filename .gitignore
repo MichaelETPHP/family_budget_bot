@@ -1,7 +1,6 @@
 # ── Secrets: NEVER commit ─────────────────────────────
 .env
 .env.*
-!.env.example
 
 # ── Personal & financial data: NEVER commit ───────────
 *.db

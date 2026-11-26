@@ -15,7 +15,7 @@ A family budget bot for Telegram, built with Python, FastAPI and python-telegram
 
 ## ☁️ Deploy with Coolify (or Dokploy / Portainer)
 1. **Source:** this repository, branch `main`. **Build pack:** Docker Compose. **Compose file:** `/docker-compose.yml`.
-2. **Environment variables:** set `BOT_TOKEN`, `ALLOWED_PHONES`, `ACCOUNTS`, `NAMES` and `TIMEZONE` (see `.env.example`). Mark `BOT_TOKEN` as secret.
+2. **Environment variables:** set the ones listed in [Configuration](#️-configuration) in the panel's Environment tab. Mark `BOT_TOKEN` as secret.
 3. **No domain or port is needed.** The bot polls Telegram, so leave the domain empty.
 4. **Stop every other copy of the bot first** (your PC, another server). Telegram allows only one per token.
 5. Deploy. Wait for the status to show healthy, and check that the logs say `🤖 Bot @… is running`.
@@ -49,13 +49,25 @@ cd /opt/family-budget-bot
 The repository has **no secrets and no personal data**. Your `.env` and data never go to Git, so you add them by hand (steps 3 and 6).
 
 ### 3. Configure
+Create a `.env` file next to `docker-compose.yml` with the variables from [Configuration](#️-configuration), one `KEY=value` per line:
 ```bash
-cp .env.example .env
-nano .env                 # BOT_TOKEN, ALLOWED_PHONES, ACCOUNTS, NAMES
+nano .env
 chmod 600 .env
 chmod +x deploy/*.sh
 ```
 Or copy your own `.env` from the PC: `scp .env root@YOUR_VPS_IP:/opt/family-budget-bot/`
+
+## ⚙️ Configuration
+These values are never stored in Git. Set them in a `.env` file or in your hosting panel.
+
+| Variable | Required | Description |
+|---|---|---|
+| `BOT_TOKEN` | ✅ | Token from @BotFather (keep secret) |
+| `ALLOWED_PHONES` | ✅ | Comma-separated phone numbers allowed to use the bot |
+| `ACCOUNTS` | ✅ | Who owns which account: `phone:Bank,Bank;phone:Bank` (first person = main earner) |
+| `NAMES` | | Display names before people register: `phone:Name,phone:Name` |
+| `TIMEZONE` | | Default `Africa/Addis_Ababa` |
+| `WEBHOOK_URL`, `WEBHOOK_SECRET`, `DOMAIN` | | Only for the optional webhook mode; leave empty for polling |
 
 To update later: `git pull && docker compose up -d --build`
 
