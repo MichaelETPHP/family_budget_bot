@@ -1,0 +1,12 @@
+# Automatic HTTPS (Let's Encrypt) in front of the bot. Only /webhook is public.
+{$DOMAIN} {
+	encode gzip
+
+	handle /webhook {
+		reverse_proxy bot:8000
+	}
+
+	handle {
+		respond "Not found" 404
+	}
+}

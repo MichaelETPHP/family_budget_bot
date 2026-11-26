@@ -1,0 +1,26 @@
+# ── Secrets: NEVER commit ─────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Personal & financial data: NEVER commit ───────────
+*.db
+*.db-journal
+*.sqlite*
+*.pickle
+family_budget*.json
+data/
+backups/
+voice_notes/
+*.ogg
+*.tgz
+*.log
+
+# ── Python / tooling ──────────────────────────────────
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.idea/
+.vscode/

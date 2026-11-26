@@ -1,0 +1,4 @@
+# Linux line endings everywhere (shell scripts and Dockerfile must stay LF on the VPS)
+* text=auto eol=lf
+*.png binary
+*.jpg binary

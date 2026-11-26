@@ -1,0 +1,58 @@
+name: family-budget-bot
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  bot:
+    build: .
+    image: family-budget-bot:latest
+    container_name: family-budget-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_DIR: /app/data
+      DB_PATH: /app/data/expenses.db
+    volumes:
+      - bot_data:/app/data          # database, bot state, voice-note backups
+    ports:
+      - "127.0.0.1:8000:8000"       # only reachable from the VPS itself (health / API)
+    logging: *logging
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ── Optional: HTTPS webhook mode ───────────────────────────────────────────
+  # Needs a domain pointing at the VPS. Set DOMAIN and WEBHOOK_URL=https://<domain> in .env,
+  # then start with:  docker compose --profile webhook up -d
+  caddy:
+    image: caddy:2-alpine
+    container_name: family-budget-caddy
+    profiles: ["webhook"]
+    restart: unless-stopped
+    depends_on:
+      - bot
+    environment:
+      DOMAIN: ${DOMAIN:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging: *logging
+
+volumes:
+  bot_data:
+  caddy_data:
+  caddy_config:
